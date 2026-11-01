@@ -44,7 +44,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
 
         SettingsKey.registerDefaults()
-        Persistence.moveDataFromOldName(in: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
         let persistence = Persistence.standard
         store = TimerStore(state: persistence.load(), persist: persistence.save)
         store.reconcileAfterLaunch(

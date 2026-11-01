@@ -806,35 +806,6 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(persistence.load(), state)
     }
 
-    func testDataMovesFromTheOldNameOnce() throws {
-        let files = FileManager.default
-        let old = directory.appendingPathComponent("TaskTimer")
-        try files.createDirectory(at: old, withIntermediateDirectories: true)
-        var state = AppState.initial()
-        state.tasks[0].name = "Design"
-        Persistence(url: old.appendingPathComponent("state.json")).save(state)
-
-        Persistence.moveDataFromOldName(in: directory)
-        let new = Persistence(url: directory.appendingPathComponent("Juggle/state.json"))
-        XCTAssertEqual(new.load().tasks[0].name, "Design")
-        XCTAssertFalse(files.fileExists(atPath: old.path))
-    }
-
-    func testOldDataNeverOverwritesNewData() throws {
-        let files = FileManager.default
-        let oldState = Persistence(url: directory.appendingPathComponent("TaskTimer/state.json"))
-        let newState = Persistence(url: directory.appendingPathComponent("Juggle/state.json"))
-        var state = AppState.initial()
-        state.tasks[0].name = "Old"
-        oldState.save(state)
-        state.tasks[0].name = "New"
-        newState.save(state)
-
-        Persistence.moveDataFromOldName(in: directory)
-        XCTAssertEqual(newState.load().tasks[0].name, "New")
-        XCTAssertTrue(files.fileExists(atPath: oldState.url.path))
-    }
-
     func testMissingFileGivesDefaults() {
         let state = Persistence(url: directory.appendingPathComponent("state.json")).load()
         XCTAssertEqual(state.tasks.map(\.name), ["Task 1", "Task 2"])

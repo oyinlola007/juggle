@@ -9,15 +9,6 @@ struct Persistence {
             .appendingPathComponent("state.json")
     )
 
-    /// The app used to be called TaskTimer. Moves its data across once, never over newer data.
-    static func moveDataFromOldName(in supportDirectory: URL) {
-        let old = supportDirectory.appendingPathComponent("TaskTimer", isDirectory: true)
-        let new = supportDirectory.appendingPathComponent("Juggle", isDirectory: true)
-        let files = FileManager.default
-        guard files.fileExists(atPath: old.path), !files.fileExists(atPath: new.path) else { return }
-        try? files.moveItem(at: old, to: new)
-    }
-
     func load() -> AppState {
         guard let data = try? Data(contentsOf: url) else { return .initial() }
         do {
