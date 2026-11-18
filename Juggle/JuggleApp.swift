@@ -68,6 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         LoginItem.applySettingAtLaunch()
     }
 
+    /// Opening the app again, from Finder, Spotlight or Launchpad, always shows something.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openWindow()
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         store?.saveNow()
     }
@@ -169,6 +175,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             return .greatestFiniteMagnitude
         }
         let windows = MenuBarSpace.windows(on: screen)
+        // From macOS 27 the window server no longer lists menu bar items, so there is
+        // nothing to measure. Stay visible rather than step aside for a bar we can't see.
+        guard !windows.isEmpty else {
+            return .greatestFiniteMagnitude
+        }
         return MenuBarSpace.compute(
             otherIcons: icons.occupiedWindows(in: windows, ownFrame: ownWindow?.frame),
             barEnd: windows.filter(\.isOnScreen).map(\.frame.maxX).max() ?? notchEdge,
