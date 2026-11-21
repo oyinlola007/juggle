@@ -32,12 +32,32 @@ The Juggle window shows each task's time today and in total. A task's details ke
 
 Your data stays on your Mac.
 
-## Run it
+## Install
 
-Requires macOS 14 or later and Xcode.
+Requires macOS 14 or later and Xcode. No Apple developer account is needed.
 
-1. Open `Juggle.xcodeproj`
-2. Press ⌘R
+1. Build the app:
+
+   ```sh
+   git clone https://github.com/oyinlola007/juggle.git
+   cd juggle
+   xcodebuild -project Juggle.xcodeproj -scheme Juggle -configuration Release -derivedDataPath build
+   ```
+
+2. Copy it to Applications and open it:
+
+   ```sh
+   cp -R build/Build/Products/Release/Juggle.app /Applications/
+   open /Applications/Juggle.app
+   ```
+
+Juggle appears in the menu bar, not the Dock, and opens at login. You can turn that off in Settings. If macOS asks, allow it in System Settings → General → Login Items.
+
+To update, quit Juggle from Settings, run `git pull`, then repeat both steps after removing the old copy with `rm -rf /Applications/Juggle.app`. Your tasks and history are kept.
+
+## Develop
+
+Open `Juggle.xcodeproj` and press ⌘R. Press ⌘U to run the tests.
 
 ## License
 
