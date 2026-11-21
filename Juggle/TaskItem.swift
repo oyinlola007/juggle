@@ -8,6 +8,15 @@ struct TaskItem: Codable, Identifiable, Equatable {
     var accumulated: TimeInterval   // seconds banked while paused
 }
 
+/// Time added by hand, such as background work done while another task ran. Kept apart from
+/// tracked time so it can be changed or removed, and counted on the day it was added.
+struct TimeEntry: Codable, Identifiable, Equatable {
+    let id: UUID
+    let taskID: UUID
+    var seconds: TimeInterval
+    let addedAt: Date
+}
+
 struct AppState: Codable, Equatable {
     var tasks: [TaskItem]       // at least one
     var activeTaskID: UUID?     // nil = all paused
@@ -17,6 +26,7 @@ struct AppState: Codable, Equatable {
     var lastSavedAt: Date?      // heartbeat; marks when a run ended if the Mac was shut down
     var archivedTasks: [TaskItem]? // deleted tasks, kept so their history still exports
     var hubstaffWasTracking: Bool? // last Hubstaff state seen; nil until the first reading
+    var timeEntries: [TimeEntry]?  // added time, for current and archived tasks
 
     static func initial() -> AppState {
         AppState(
@@ -36,6 +46,10 @@ struct AppState: Codable, Equatable {
         for index in copy.tasks.indices {
             copy.tasks[index].name = String(copy.tasks[index].name.prefix(TaskItem.maxNameLength))
             copy.tasks[index].accumulated = max(copy.tasks[index].accumulated, 0)
+        }
+        copy.timeEntries = copy.timeEntries?.filter { $0.seconds > 0 }
+        if copy.timeEntries?.isEmpty == true {
+            copy.timeEntries = nil
         }
         if !copy.tasks.contains(where: { $0.id == copy.activeTaskID }) || copy.activeSince == nil {
             copy.activeTaskID = nil

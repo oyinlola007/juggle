@@ -41,17 +41,33 @@ final class TimerStore {
         state.activeTaskID == id
     }
 
-    /// Rule 1: `accumulated` + (if active) `now − activeSince`.
+    /// Rule 1: tracked time plus any time added by hand.
     func displayedTime(of id: UUID, now: Date = Date()) -> TimeInterval {
+        trackedTime(of: id, now: now) + addedTime(of: id)
+    }
+
+    /// `accumulated` + (if active) `now − activeSince`.
+    func trackedTime(of id: UUID, now: Date = Date()) -> TimeInterval {
         guard let task = task(id) else { return 0 }
         return task.accumulated + liveSeconds(of: id, now: now)
+    }
+
+    func addedTime(of id: UUID) -> TimeInterval {
+        entries(of: id).reduce(0) { $0 + $1.seconds }
+    }
+
+    /// Time added by hand to this task, oldest first.
+    func entries(of id: UUID) -> [TimeEntry] {
+        (state.timeEntries ?? []).filter { $0.taskID == id }.sorted { $0.addedAt < $1.addedAt }
     }
 
     /// Time counted today for this task: banked today + the live portion since midnight.
     /// Never more than the task's time, so resetting a task resets its today as well, while
     /// history keeps the record for export.
     func todayTime(of id: UUID, now: Date = Date()) -> TimeInterval {
-        var today = state.history[dayKey(now)]?[id] ?? 0
+        let todayKey = dayKey(now)
+        var today = state.history[todayKey]?[id] ?? 0
+        today += entries(of: id).filter { dayKey($0.addedAt) == todayKey }.reduce(0) { $0 + $1.seconds }
         if isRunning(id), let since = state.activeSince {
             today += max(now.timeIntervalSince(max(since, calendar.startOfDay(for: now))), 0)
         }
@@ -92,11 +108,14 @@ final class TimerStore {
         return now < undoExpiry
     }
 
-    /// History including the unbanked part of the current run, for export.
+    /// History including the unbanked part of the current run and time added by hand, for export.
     func historyIncludingLive(now: Date = Date()) -> [String: [UUID: TimeInterval]] {
         var history = state.history
         if let id = state.activeTaskID, let since = state.activeSince {
             add(taskID: id, from: since, to: now, into: &history)
+        }
+        for entry in state.timeEntries ?? [] {
+            history[dayKey(entry.addedAt), default: [:]][entry.taskID, default: 0] += entry.seconds
         }
         return history
     }
@@ -141,21 +160,55 @@ final class TimerStore {
         didChange()
     }
 
-    /// Rule 5. Time already worked in the current run still goes to history.
+    /// Rule 5: sets the tracked part; added time is kept. Time already worked in the current
+    /// run still goes to history.
     func setTime(of id: UUID, to seconds: TimeInterval, now: Date = Date()) {
-        guard let index = index(of: id) else { return }
+        guard index(of: id) != nil else { return }
         takeUndoSnapshot(now: now)
-        if isRunning(id) {
-            bankActive(now: now)
-            start(id, now: now)
-        }
-        state.tasks[index].accumulated = max(seconds, 0)
+        setTracked(id, to: seconds, now: now)
         didChange()
     }
 
-    /// Rule 6: history is deliberately left alone.
+    /// Rule 6: the task goes back to 0:00, and history is deliberately left alone. Added time
+    /// moves into history first, so the export still has it.
     func reset(_ id: UUID, now: Date = Date()) {
-        setTime(of: id, to: 0, now: now)
+        guard index(of: id) != nil else { return }
+        takeUndoSnapshot(now: now)
+        setTracked(id, to: 0, now: now)
+        for entry in entries(of: id) {
+            state.history[dayKey(entry.addedAt), default: [:]][id, default: 0] += entry.seconds
+        }
+        replaceEntries(of: id, with: [])
+        didChange()
+    }
+
+    /// Adds time worked away from Juggle, such as background work while another task ran.
+    func addTime(to id: UUID, seconds: TimeInterval, now: Date = Date()) {
+        let seconds = seconds.rounded()
+        guard seconds >= 1, index(of: id) != nil else { return }
+        takeUndoSnapshot(now: now)
+        let entry = TimeEntry(id: UUID(), taskID: id, seconds: seconds, addedAt: now)
+        replaceEntries(of: id, with: entries(of: id) + [entry])
+        didChange()
+    }
+
+    /// The edit sheet's Save, as one undo step. `tracked` is nil when it wasn't changed, so
+    /// renaming a running task doesn't rewind it. Entries of 0 seconds are removed.
+    func edit(_ id: UUID, name: String, tracked: TimeInterval?, entries newEntries: [TimeEntry], now: Date = Date()) {
+        guard index(of: id) != nil else { return }
+        let kept = newEntries
+            .filter { $0.taskID == id }
+            .map { TimeEntry(id: $0.id, taskID: id, seconds: $0.seconds.rounded(), addedAt: $0.addedAt) }
+            .filter { $0.seconds >= 1 }
+        let changesTime = tracked != nil || kept != entries(of: id)
+        if changesTime {
+            takeUndoSnapshot(now: now)
+            if let tracked {
+                setTracked(id, to: tracked, now: now)
+            }
+            replaceEntries(of: id, with: kept)
+        }
+        rename(id, to: name)
     }
 
     /// A fresh start: everything goes, including history, leaving one empty "Task 1".
@@ -165,6 +218,7 @@ final class TimerStore {
         state.tasks = [task]
         state.archivedTasks = nil
         state.history = [:]
+        state.timeEntries = nil
         state.activeTaskID = nil
         state.activeSince = nil
         state.lastActiveTaskID = task.id
@@ -215,6 +269,7 @@ final class TimerStore {
         state.activeSince = snapshot.activeSince
         state.lastActiveTaskID = snapshot.lastActiveTaskID
         state.history = snapshot.history
+        state.timeEntries = snapshot.timeEntries
         taskToResume = nil
         clearUndo()
         didChange()
@@ -326,6 +381,20 @@ final class TimerStore {
     private func liveSeconds(of id: UUID, now: Date) -> TimeInterval {
         guard isRunning(id), let since = state.activeSince else { return 0 }
         return max(now.timeIntervalSince(since), 0)
+    }
+
+    private func setTracked(_ id: UUID, to seconds: TimeInterval, now: Date) {
+        guard let index = index(of: id) else { return }
+        if isRunning(id) {
+            bankActive(now: now)
+            start(id, now: now)
+        }
+        state.tasks[index].accumulated = max(seconds, 0)
+    }
+
+    private func replaceEntries(of id: UUID, with entries: [TimeEntry]) {
+        let all = (state.timeEntries ?? []).filter { $0.taskID != id } + entries
+        state.timeEntries = all.isEmpty ? nil : all
     }
 
     private func start(_ id: UUID, now: Date) {

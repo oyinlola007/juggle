@@ -6,6 +6,7 @@ enum SettingsKey {
     static let resumeAfterWake = "resumeAfterWake"
     static let launchAtLogin = "launchAtLogin"
     static let followHubstaff = "followHubstaff"
+    static let askToAddTime = "askToAddTime"
 
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
@@ -13,6 +14,7 @@ enum SettingsKey {
             resumeAfterWake: false,
             launchAtLogin: true,
             followHubstaff: true,
+            askToAddTime: true,
         ])
     }
 }
@@ -231,6 +233,7 @@ private struct SettingsTab: View {
     @AppStorage(SettingsKey.resumeAfterWake) private var resumeAfterWake = false
     @AppStorage(SettingsKey.launchAtLogin) private var launchAtLogin = true
     @AppStorage(SettingsKey.followHubstaff) private var followHubstaff = true
+    @AppStorage(SettingsKey.askToAddTime) private var askToAddTime = true
 
     @State private var loginItemError: String?
     @State private var hasMenuAccess = MenuBarSpace.canReadMenus
@@ -262,6 +265,10 @@ private struct SettingsTab: View {
                         Text("Pauses when Hubstaff stops, and continues the last task when it starts. Juggle never starts or stops Hubstaff.")
                     }
                 }
+            }
+
+            Section {
+                Toggle("Offer to add time when switching tasks", isOn: $askToAddTime)
             }
 
             Section {

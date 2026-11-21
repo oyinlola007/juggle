@@ -38,6 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private var shortcutTaskCount = 0
     private var frontMenuRightEdge: CGFloat?
     private let menuQueue = DispatchQueue(label: "Juggle.menus")
+    private let prompt = AddTimePrompt()
+    private var promptTimeout: DispatchWorkItem?
+    /// How long the add-time field waits for typing before the list closes by itself.
+    private static let promptDuration: TimeInterval = 10
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Unit tests run inside this app and must not touch the real state or menu bar.
@@ -82,6 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     private var pauseOnSleep: Bool {
         UserDefaults.standard.bool(forKey: SettingsKey.pauseOnSleep)
+    }
+
+    private var asksToAddTime: Bool {
+        UserDefaults.standard.bool(forKey: SettingsKey.askToAddTime)
     }
 
     private var followsHubstaff: Bool {
@@ -225,9 +233,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     private func setUpPopover() {
         let actions = PopoverActions(
             close: { [weak self] in self?.popover.performClose(nil) },
-            openWindow: { [weak self] in self?.openWindow() }
+            openWindow: { [weak self] in self?.openWindow() },
+            start: { [weak self] id in self?.startFromList(id) },
+            submitTime: { [weak self] in self?.submitAddedTime() },
+            keepOpen: { [weak self] in self?.keepPromptOpen() }
         )
-        let controller = NSHostingController(rootView: PopoverView(store: store, actions: actions))
+        let controller = NSHostingController(rootView: PopoverView(store: store, prompt: prompt, actions: actions))
         controller.sizingOptions = [.preferredContentSize]
         popover.contentViewController = controller
         popover.behavior = .transient
@@ -260,6 +271,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
     func popoverDidClose(_ notification: Notification) {
         lastPopoverClose = Date()
+        keepPromptOpen()
+        prompt.taskID = nil
+        prompt.text = ""
         labelView.isHighlighted = false
         if let keyMonitor {
             NSEvent.removeMonitor(keyMonitor)
@@ -288,16 +302,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             popover.performClose(nil)
             return true
         }
-        guard let key = event.charactersIgnoringModifiers else { return false }
+        // While the add-time field is open, typing goes to it.
+        guard prompt.taskID == nil, let key = event.charactersIgnoringModifiers else { return false }
         if key == " " {
             store.pauseAll()
-        } else if let number = Int(key), number >= 1 {
-            store.selectTask(at: number - 1)
+            popover.performClose(nil)
+        } else if let number = Int(key), store.state.tasks.indices.contains(number - 1) {
+            startFromList(store.state.tasks[number - 1].id)
         } else {
             return false
         }
-        popover.performClose(nil)
         return true
+    }
+
+    // MARK: - Adding time after a switch
+
+    /// A click or digit in the list: starts the task, then offers to add time to it.
+    private func startFromList(_ id: UUID) {
+        let wasRunning = store.isRunning(id)
+        store.select(id)
+        if !wasRunning, asksToAddTime {
+            offerToAddTime(to: id)
+        } else {
+            popover.performClose(nil)
+        }
+    }
+
+    /// A task shortcut: starts or pauses. Only starting offers to add time.
+    private func toggleFromShortcut(at index: Int) {
+        guard store.state.tasks.indices.contains(index) else { return }
+        let id = store.state.tasks[index].id
+        store.toggleTask(at: index)
+        if store.isRunning(id), asksToAddTime {
+            offerToAddTime(to: id)
+        } else if prompt.taskID == id {
+            popover.performClose(nil)
+        }
+    }
+
+    private func offerToAddTime(to id: UUID) {
+        prompt.taskID = id
+        prompt.text = ""
+        keepPromptOpen()
+        let timeout = DispatchWorkItem { [weak self] in self?.popover.performClose(nil) }
+        promptTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.promptDuration, execute: timeout)
+        if !popover.isShown {
+            showPopover()
+        }
+    }
+
+    private func keepPromptOpen() {
+        promptTimeout?.cancel()
+        promptTimeout = nil
+    }
+
+    private func submitAddedTime() {
+        guard let id = prompt.taskID else { return }
+        if prompt.text.trimmingCharacters(in: .whitespaces).isEmpty {
+            popover.performClose(nil)
+            return
+        }
+        guard let seconds = Formatting.parseDuration(prompt.text) else {
+            NSSound.beep()
+            return
+        }
+        store.addTime(to: id, seconds: seconds)
+        popover.performClose(nil)
     }
 
     // MARK: - Export
@@ -327,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
 
         KeyboardShortcuts.removeAllHandlers()
         for index in 0..<count {
-            KeyboardShortcuts.onKeyDown(for: .taskPosition(index)) { [weak self] in self?.store.toggleTask(at: index) }
+            KeyboardShortcuts.onKeyDown(for: .taskPosition(index)) { [weak self] in self?.toggleFromShortcut(at: index) }
         }
         KeyboardShortcuts.onKeyDown(for: .pauseAllTasks) { [weak self] in self?.store.pauseAll() }
         KeyboardShortcuts.onKeyDown(for: .undoLastAction) { [weak self] in self?.store.undo() }

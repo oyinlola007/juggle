@@ -557,6 +557,115 @@ final class TimerStoreTests: XCTestCase {
         XCTAssertEqual(history["2026-03-10"]?[a], 90)
         XCTAssertNil(store.state.history["2026-03-10"])
     }
+
+    // MARK: - Added time
+
+    func testAddedTimeCountsTowardsTheTaskButNotItsTrackedTime() {
+        store.toggle(a, now: at(0))
+        store.addTime(to: a, seconds: 720, now: at(60))
+
+        XCTAssertEqual(store.trackedTime(of: a, now: at(100)), 100)
+        XCTAssertEqual(store.addedTime(of: a), 720)
+        XCTAssertEqual(store.displayedTime(of: a, now: at(100)), 820)
+        XCTAssertEqual(store.todayTime(of: a, now: at(100)), 820)
+        XCTAssertEqual(store.totalTime(now: at(100)), 820)
+        XCTAssertTrue(store.isRunning(a))
+    }
+
+    func testAddedTimeIsExportedOnTheDayItWasAdded() {
+        store.addTime(to: b, seconds: 300, now: date(9, 23, 0))
+        store.addTime(to: b, seconds: 60, now: date(10, 9, 0))
+
+        let history = store.historyIncludingLive(now: date(10, 12, 0))
+        XCTAssertEqual(history["2026-03-09"]?[b], 300)
+        XCTAssertEqual(history["2026-03-10"]?[b], 60)
+        XCTAssertEqual(store.todayTime(of: b, now: date(10, 12, 0)), 60)
+        XCTAssertNil(store.state.history["2026-03-10"])
+    }
+
+    func testNothingIsAddedForZeroOrAnUnknownTask() {
+        store.addTime(to: a, seconds: 0, now: at(0))
+        store.addTime(to: a, seconds: 0.4, now: at(0))
+        store.addTime(to: UUID(), seconds: 60, now: at(0))
+        XCTAssertNil(store.state.timeEntries)
+    }
+
+    func testUndoRemovesTheAddedTimeButKeepsTheSwitch() {
+        store.toggle(a, now: at(0))
+        store.toggle(b, now: at(60))
+        store.addTime(to: b, seconds: 600, now: at(65))
+        store.undo(now: at(70))
+
+        XCTAssertTrue(store.isRunning(b))
+        XCTAssertEqual(store.addedTime(of: b), 0)
+        XCTAssertEqual(store.state.tasks[0].accumulated, 60)
+    }
+
+    func testSetTimeChangesOnlyTheTrackedPart() {
+        store.addTime(to: a, seconds: 600, now: at(0))
+        store.setTime(of: a, to: 60, now: at(10))
+        XCTAssertEqual(store.displayedTime(of: a, now: at(20)), 660)
+    }
+
+    func testEditChangesAndRemovesEntriesAsOneUndoStep() {
+        store.addTime(to: a, seconds: 600, now: at(0))
+        store.addTime(to: a, seconds: 120, now: at(10))
+        let entries = store.entries(of: a)
+        var changed = entries[0]
+        changed.seconds = 900
+
+        store.edit(a, name: "Docs", tracked: 30, entries: [changed], now: at(20))
+        XCTAssertEqual(store.state.tasks[0].name, "Docs")
+        XCTAssertEqual(store.entries(of: a), [changed])
+        XCTAssertEqual(store.displayedTime(of: a, now: at(20)), 930)
+
+        store.undo(now: at(25))
+        XCTAssertEqual(store.entries(of: a), entries)
+        XCTAssertEqual(store.trackedTime(of: a, now: at(25)), 0)
+        XCTAssertEqual(store.state.tasks[0].name, "Docs")
+    }
+
+    func testEditDropsEntriesOfZeroAndDoesNotRewindARunningTask() {
+        store.toggle(a, now: at(0))
+        store.addTime(to: a, seconds: 600, now: at(10))
+        var zero = store.entries(of: a)[0]
+        zero.seconds = 0
+
+        store.edit(a, name: "Task 1", tracked: nil, entries: [zero], now: at(50))
+        XCTAssertNil(store.state.timeEntries)
+        XCTAssertEqual(store.displayedTime(of: a, now: at(50)), 50)
+        XCTAssertTrue(store.isRunning(a))
+    }
+
+    func testEditWithNoTimeChangeKeepsTheEarlierUndo() {
+        store.toggle(a, now: at(0))
+        store.edit(a, name: "Docs", tracked: nil, entries: [], now: at(2))
+        XCTAssertTrue(store.canUndo(now: at(3)))
+        store.undo(now: at(3))
+        XCTAssertFalse(store.isAnyRunning)
+    }
+
+    func testResetClearsAddedTimeButKeepsItInTheExport() {
+        store.addTime(to: a, seconds: 600, now: at(0))
+        store.reset(a, now: at(10))
+
+        XCTAssertEqual(store.displayedTime(of: a, now: at(20)), 0)
+        XCTAssertEqual(store.todayTime(of: a, now: at(20)), 0)
+        XCTAssertEqual(store.historyIncludingLive(now: at(20))["2026-03-10"]?[a], 600)
+    }
+
+    func testDeletedTaskKeepsItsAddedTimeInTheExport() {
+        store.addTime(to: c, seconds: 600, now: at(0))
+        let deleted = c
+        store.deleteTask(deleted, now: at(10))
+        XCTAssertEqual(store.historyIncludingLive(now: at(20))["2026-03-10"]?[deleted], 600)
+    }
+
+    func testResetEverythingClearsAddedTime() {
+        store.addTime(to: a, seconds: 600, now: at(0))
+        store.resetEverything()
+        XCTAssertNil(store.state.timeEntries)
+    }
 }
 
 final class HubstaffMonitorTests: XCTestCase {
@@ -708,6 +817,24 @@ final class AccessDialogTests: XCTestCase {
 }
 
 final class FormattingTests: XCTestCase {
+    func testParsesDurations() {
+        XCTAssertEqual(Formatting.parseDuration("12"), 720)
+        XCTAssertEqual(Formatting.parseDuration(" 1.5 "), 90)
+        XCTAssertEqual(Formatting.parseDuration("1:05"), 3900)
+        XCTAssertEqual(Formatting.parseDuration("0:12:30"), 750)
+        XCTAssertEqual(Formatting.parseDuration("1h 5m"), 3900)
+        XCTAssertEqual(Formatting.parseDuration("4m32s"), 272)
+        XCTAssertEqual(Formatting.parseDuration("90 sec"), 90)
+        XCTAssertEqual(Formatting.parseDuration("2 hours"), 7200)
+        XCTAssertEqual(Formatting.parseDuration("✻ Worked for 4m 32s"), 272)
+    }
+
+    func testRejectsAnythingThatIsNotADuration() {
+        for text in ["", " ", "abc", "0", "0:00", "-5", "12 apples", "nan", "inf", "1e3"] {
+            XCTAssertNil(Formatting.parseDuration(text), text)
+        }
+    }
+
     func testMenuBarNameUsesAllTheRoomOnOffer() {
         let fitted = MenuBarLabel.fittedName("Design system with a long name", time: "1:24:05", availableWidth: .greatestFiniteMagnitude)
         XCTAssertEqual(fitted, "Design system with a long name")
@@ -830,6 +957,41 @@ final class PersistenceTests: XCTestCase {
         let repaired = state.sanitized()
         XCTAssertNil(repaired.activeTaskID)
         XCTAssertNil(repaired.activeSince)
+    }
+
+    func testRoundTripsAddedTime() {
+        let persistence = Persistence(url: directory.appendingPathComponent("state.json"))
+        var state = AppState.initial()
+        state.timeEntries = [TimeEntry(id: UUID(), taskID: state.tasks[0].id, seconds: 600, addedAt: Date(timeIntervalSince1970: 1_773_144_000))]
+
+        persistence.save(state)
+        XCTAssertEqual(persistence.load(), state)
+    }
+
+    /// A state file from before added time existed has no `timeEntries` key at all.
+    func testLoadsAFileSavedBeforeAddedTimeExisted() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("state.json")
+        let id = "6F9619FF-8B86-D011-B42D-00C04FC964FF"
+        let json = """
+        {"tasks":[{"id":"\(id)","name":"Client work","accumulated":5025.5}],
+         "history":{"2026-03-10":["\(id)",5025.5]},
+         "lastActiveTaskID":"\(id)","lastSavedAt":794832000,"hubstaffWasTracking":false}
+        """
+        try Data(json.utf8).write(to: url)
+
+        let state = Persistence(url: url).load()
+        XCTAssertEqual(state.tasks.map(\.name), ["Client work"])
+        XCTAssertEqual(state.tasks[0].accumulated, 5025.5)
+        XCTAssertEqual(state.history["2026-03-10"]?[UUID(uuidString: id)!], 5025.5)
+        XCTAssertNil(state.timeEntries)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["state.json"])
+    }
+
+    func testSanitizeDropsEmptyEntries() {
+        var state = AppState.initial()
+        state.timeEntries = [TimeEntry(id: UUID(), taskID: state.tasks[0].id, seconds: 0, addedAt: Date())]
+        XCTAssertNil(state.sanitized().timeEntries)
     }
 
     func testStateWithNoTasksGetsDefaults() {

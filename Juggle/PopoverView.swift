@@ -3,6 +3,18 @@ import SwiftUI
 struct PopoverActions {
     let close: () -> Void
     let openWindow: () -> Void
+    /// Starts a task; the delegate decides whether to offer adding time or close.
+    let start: (UUID) -> Void
+    let submitTime: () -> Void
+    /// The user is typing in the add-time field, so it shouldn't close by itself.
+    let keepOpen: () -> Void
+}
+
+/// The add-time field shown under a task just after switching to it.
+@Observable
+final class AddTimePrompt {
+    var taskID: UUID?
+    var text = ""
 }
 
 /// Green while a task runs, grey otherwise, matching the menu bar.
@@ -59,6 +71,7 @@ struct PopoverView: View {
     private static let maxVisibleRows: CGFloat = 10
 
     let store: TimerStore
+    let prompt: AddTimePrompt
     let actions: PopoverActions
 
     var body: some View {
@@ -70,6 +83,9 @@ struct PopoverView: View {
                     VStack(spacing: 0) {
                         ForEach(store.state.tasks) { task in
                             taskRow(task, now: now)
+                            if prompt.taskID == task.id {
+                                AddTimeField(prompt: prompt, actions: actions)
+                            }
                         }
                     }
                     .padding(Self.padding)
@@ -102,15 +118,15 @@ struct PopoverView: View {
     }
 
     private var listHeight: CGFloat {
-        let rows = min(CGFloat(store.state.tasks.count), Self.maxVisibleRows)
+        let promptRows = prompt.taskID == nil ? 0 : 1
+        let rows = min(CGFloat(store.state.tasks.count + promptRows), Self.maxVisibleRows)
         return rows * MenuRow<EmptyView, EmptyView>.height + Self.padding * 2
     }
 
     private func taskRow(_ task: TaskItem, now: Date) -> some View {
         let isRunning = store.isRunning(task.id)
         return MenuRow(title: task.name, action: {
-            store.select(task.id)
-            actions.close()
+            actions.start(task.id)
         }, leading: {
             StatusDot(isRunning: isRunning)
         }, trailing: {
@@ -120,5 +136,32 @@ struct PopoverView: View {
                 .fixedSize()
         })
         .help(task.name)
+    }
+}
+
+/// Type `12`, `1:05` or `4m 32s` and press Return. Esc or clicking away adds nothing.
+private struct AddTimeField: View {
+    @Bindable var prompt: AddTimePrompt
+    let actions: PopoverActions
+
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "plus")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 12)
+            TextField("Add time", text: $prompt.text)
+                .textFieldStyle(.plain)
+                .monospacedDigit()
+                .focused($isFocused)
+                .onSubmit(actions.submitTime)
+                .onChange(of: prompt.text) { actions.keepOpen() }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: MenuRow<EmptyView, EmptyView>.height)
+        // The field can't take focus until it's in the popover's window.
+        .onAppear { DispatchQueue.main.async { isFocused = true } }
     }
 }
